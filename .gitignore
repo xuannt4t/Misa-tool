@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Runtime state and personal browser sessions
+data/
+logs/
+profile/
+
+# Build artefacts
+build/
+dist/
+*.spec
+
+# Local editor/system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
