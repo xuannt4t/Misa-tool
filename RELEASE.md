@@ -4,10 +4,10 @@ Mỗi bản cập nhật được phát hành dưới dạng ZIP trên GitHub Re
 
 ## Tạo ZIP
 
-Từ thư mục gốc dự án, chạy PowerShell:
+Từ thư mục gốc dự án, chạy lệnh sau trong Command Prompt hoặc PowerShell:
 
-```powershell
-.\scripts\build-release.ps1 -Version 1.0.0
+```cmd
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.0
 ```
 
 File tạo ra là `release\MISA-Auto-Tool-v1.0.0.zip`.
@@ -26,4 +26,3 @@ File tạo ra là `release\MISA-Auto-Tool-v1.0.0.zip`.
 3. Giải nén ZIP mới vào thư mục cha của `MISA Auto Tool`, chọn **Replace files** nếu Windows hỏi.
 4. Không xóa thư mục `data`, `profile` hoặc `logs`; chúng chứa cấu hình, dữ liệu chạy và/hoặc phiên đăng nhập.
 5. Mở lại `MISA Auto Tool.exe`.
-

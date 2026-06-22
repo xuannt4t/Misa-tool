@@ -20,6 +20,12 @@ Chế độ này được điều khiển bởi `USE_WINDOWS_CHROME_PROFILE` tro
 
 ## Build EXE
 
+Để tạo ZIP phát hành cho khách hàng và đăng lên GitHub Releases, xem [RELEASE.md](RELEASE.md). Lệnh build ZIP chạy được từ Command Prompt hoặc PowerShell:
+
+```cmd
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.0
+```
+
 ```powershell
 pyinstaller --onedir --windowed --name "MISA Auto Tool" main.py
 ```
