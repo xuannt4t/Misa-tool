@@ -11,6 +11,7 @@ profile/
 # Build artefacts
 build/
 dist/
+release/
 *.spec
 
 # Local editor/system files
