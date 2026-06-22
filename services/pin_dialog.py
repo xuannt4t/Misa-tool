@@ -88,7 +88,7 @@ def _send_text(text: str) -> None:
         user32.SendInput(len(events), array_type(*events), ctypes.sizeof(INPUT))
 
 
-def submit_pin_if_prompted(pin: str, timeout_seconds: float = 30) -> bool:
+def submit_pin_if_prompted(pin: str) -> bool:
     """Fill the focused PIN control and submit the native signer dialog.
 
     Returns ``True`` only when an ``Xác nhận PIN`` window was found and input
@@ -96,13 +96,7 @@ def submit_pin_if_prompted(pin: str, timeout_seconds: float = 30) -> bool:
     """
     if not pin or os.name != "nt":
         return False
-    deadline = time.monotonic() + timeout_seconds
-    hwnd = None
-    while time.monotonic() < deadline:
-        hwnd = _find_pin_dialog()
-        if hwnd:
-            break
-        time.sleep(0.2)
+    hwnd = _find_pin_dialog()
     if not hwnd:
         return False
 

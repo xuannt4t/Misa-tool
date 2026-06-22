@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from config.config import APP_NAME, LOG_FILE, ensure_runtime_directories
 from config.config import (
     ADJUSTMENT_REASON, ADJUSTMENT_ITEM_NAME, ADJUSTMENT_VAT_RATE,
-    DEFAULT_RECORD_RUN_LIMIT, DEFAULT_RECORD_RUN_MODE, MAX_CONCURRENT_TASKS,
+    DEFAULT_RECORD_RUN_LIMIT, DEFAULT_RECORD_RUN_MODE, DEFAULT_SIGNING_PIN, MAX_CONCURRENT_TASKS,
 )
 from database.database import Database
 from services.excel_reader import read_invoices_excel
@@ -418,6 +418,18 @@ class MainWindow(QMainWindow):
         self.signing_pin_input = QLineEdit()
         self.signing_pin_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.signing_pin_input.setPlaceholderText("Nhập mã PIN ký số")
+        self.pin_visibility_button = QPushButton("👁")
+        self.pin_visibility_button.setCheckable(True)
+        self.pin_visibility_button.setFixedSize(34, 34)
+        self.pin_visibility_button.setToolTip("Hiển thị mã PIN ký số")
+        self.pin_visibility_button.setAccessibleName("Hiển thị mã PIN ký số")
+        self.pin_visibility_button.toggled.connect(self._toggle_signing_pin_visibility)
+        pin_input_widget = QWidget()
+        pin_input_layout = QHBoxLayout(pin_input_widget)
+        pin_input_layout.setContentsMargins(0, 0, 0, 0)
+        pin_input_layout.setSpacing(6)
+        pin_input_layout.addWidget(self.signing_pin_input)
+        pin_input_layout.addWidget(self.pin_visibility_button)
         for editable in (
             self.concurrent_tasks_input,
             self.record_limit_input,
@@ -446,7 +458,7 @@ class MainWindow(QMainWindow):
         config_form.addRow("L\u00fd do \u0111i\u1ec1u ch\u1ec9nh:", self.reason_input)
         config_form.addRow("N\u1ed9i dung t\u00ean h\u00e0ng h\u00f3a/d\u1ecbch v\u1ee5:", self.item_name_input)
         config_form.addRow("Thu\u1ebf GTGT:", self.vat_rate_input)
-        config_form.addRow("Mã PIN ký số:", self.signing_pin_input)
+        config_form.addRow("Mã PIN ký số:", pin_input_widget)
         config_form.addRow("", save_row)
         self.config_help = QLabel("Tham số dùng được: {ten_khach_hang}, {mst2}, {hoa_don}, {date}")
         self.config_help.setStyleSheet("color:#64748b;")
@@ -629,11 +641,21 @@ class MainWindow(QMainWindow):
         self.reason_input.setPlainText(self._database.get_setting("adjustment_reason", ADJUSTMENT_REASON) or ADJUSTMENT_REASON)
         self.item_name_input.setPlainText(self._database.get_setting("adjustment_item_name", ADJUSTMENT_ITEM_NAME) or ADJUSTMENT_ITEM_NAME)
         self.vat_rate_input.setText(self._database.get_setting("adjustment_vat_rate", ADJUSTMENT_VAT_RATE) or ADJUSTMENT_VAT_RATE)
-        self.signing_pin_input.setText(self._database.get_setting("signing_pin", "") or "")
+        self.signing_pin_input.setText(
+            self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or ""
+        )
         run_mode = self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE
         self.run_all_toggle.setChecked(run_mode == "all")
         self.record_limit_input.setValue(int(self._database.get_setting("record_run_limit", str(DEFAULT_RECORD_RUN_LIMIT)) or DEFAULT_RECORD_RUN_LIMIT))
         self.update_run_limit_enabled()
+
+    def _toggle_signing_pin_visibility(self, visible: bool) -> None:
+        self.signing_pin_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
+        self.pin_visibility_button.setToolTip(
+            "Ẩn mã PIN ký số" if visible else "Hiển thị mã PIN ký số"
+        )
 
     def save_config(self) -> None:
         confirmation = QMessageBox.question(

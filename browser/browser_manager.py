@@ -23,6 +23,7 @@ from config.config import (
     ADJUSTMENT_VAT_RATE,
     DEFAULT_RECORD_RUN_LIMIT,
     DEFAULT_RECORD_RUN_MODE,
+    DEFAULT_SIGNING_PIN,
     MAX_CONCURRENT_TASKS,
     INVOICE_ADJUSTMENT_URL,
     PROFILE_DIR,
@@ -376,16 +377,20 @@ class BrowserManager(QObject):
         self._emit("Đã bỏ chọn gửi hóa đơn cho khách hàng.")
         publish_button.click()
         self._confirm_publish_warning_if_prompted(page)
-        if submit_pin_if_prompted(self._runtime_settings.get("signing_pin", "")):
-            self._emit("Đã gửi mã PIN cho ứng dụng ký số.")
-        self._wait_for_publish_or_skip_kyso_unavailable(page, publish_button)
+        self._wait_for_publish_or_skip_kyso_unavailable(
+            page, publish_button, self._runtime_settings.get("signing_pin", "")
+        )
         self._emit("Đã bấm Phát hành hóa đơn.")
 
-    def _wait_for_publish_or_skip_kyso_unavailable(self, page, publish_button) -> None:
+    def _wait_for_publish_or_skip_kyso_unavailable(self, page, publish_button, pin: str) -> None:
         """Wait for publish completion but fail fast if the KYSO bridge is unavailable."""
         deadline = time.monotonic() + 30
+        pin_submitted = False
         while time.monotonic() < deadline:
             self._skip_if_misa_kyso_unavailable(page, timeout=250)
+            if not pin_submitted and submit_pin_if_prompted(pin):
+                pin_submitted = True
+                self._emit("Đã gửi mã PIN cho ứng dụng ký số.")
             try:
                 if not publish_button.is_visible():
                     return
@@ -474,7 +479,7 @@ class BrowserManager(QObject):
             "max_concurrent_tasks": self._database.get_setting("max_concurrent_tasks", str(MAX_CONCURRENT_TASKS)) or "1",
             "record_run_mode": self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE,
             "record_run_limit": self._database.get_setting("record_run_limit", str(DEFAULT_RECORD_RUN_LIMIT)) or str(DEFAULT_RECORD_RUN_LIMIT),
-            "signing_pin": self._database.get_setting("signing_pin", "") or "",
+            "signing_pin": self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or "",
         }
         self._active_job_id = self._database.start_demo_job(row["id"])
         self._job_started_at = time.monotonic()
