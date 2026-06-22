@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from config.config import APP_NAME, LOG_FILE, ensure_runtime_directories
 from config.config import (
-    ADJUSTMENT_REASON, ADJUSTMENT_ITEM_NAME, ADJUSTMENT_VAT_RATE,
+    ADJUSTMENT_REASON, ADJUSTMENT_ITEM_NAME, ADJUSTMENT_ITEM_TYPE, ADJUSTMENT_VAT_RATE,
     DEFAULT_RECORD_RUN_LIMIT, DEFAULT_RECORD_RUN_MODE, DEFAULT_SIGNING_PIN, MAX_CONCURRENT_TASKS,
 )
 from database.database import Database
@@ -414,6 +414,7 @@ class MainWindow(QMainWindow):
         self.reason_input.setFixedHeight(70)
         self.item_name_input = QTextEdit()
         self.item_name_input.setFixedHeight(90)
+        self.item_type_input = QLineEdit()
         self.vat_rate_input = QLineEdit()
         self.signing_pin_input = QLineEdit()
         self.signing_pin_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -435,6 +436,7 @@ class MainWindow(QMainWindow):
             self.record_limit_input,
             self.reason_input,
             self.item_name_input,
+            self.item_type_input,
             self.vat_rate_input,
             self.signing_pin_input,
         ):
@@ -457,6 +459,7 @@ class MainWindow(QMainWindow):
         config_form.addRow("Phạm vi chạy:", run_mode_widget)
         config_form.addRow("L\u00fd do \u0111i\u1ec1u ch\u1ec9nh:", self.reason_input)
         config_form.addRow("N\u1ed9i dung t\u00ean h\u00e0ng h\u00f3a/d\u1ecbch v\u1ee5:", self.item_name_input)
+        config_form.addRow("T\u00ednh ch\u1ea5t HHDV:", self.item_type_input)
         config_form.addRow("Thu\u1ebf GTGT:", self.vat_rate_input)
         config_form.addRow("Mã PIN ký số:", pin_input_widget)
         config_form.addRow("", save_row)
@@ -640,6 +643,7 @@ class MainWindow(QMainWindow):
         self.concurrent_tasks_input.setValue(int(self._database.get_setting("max_concurrent_tasks", str(MAX_CONCURRENT_TASKS)) or 1))
         self.reason_input.setPlainText(self._database.get_setting("adjustment_reason", ADJUSTMENT_REASON) or ADJUSTMENT_REASON)
         self.item_name_input.setPlainText(self._database.get_setting("adjustment_item_name", ADJUSTMENT_ITEM_NAME) or ADJUSTMENT_ITEM_NAME)
+        self.item_type_input.setText(self._database.get_setting("adjustment_item_type", ADJUSTMENT_ITEM_TYPE) or ADJUSTMENT_ITEM_TYPE)
         self.vat_rate_input.setText(self._database.get_setting("adjustment_vat_rate", ADJUSTMENT_VAT_RATE) or ADJUSTMENT_VAT_RATE)
         self.signing_pin_input.setText(
             self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or ""
@@ -670,6 +674,7 @@ class MainWindow(QMainWindow):
         self._database.set_setting("max_concurrent_tasks", str(self.concurrent_tasks_input.value()))
         self._database.set_setting("adjustment_reason", self.reason_input.toPlainText().strip())
         self._database.set_setting("adjustment_item_name", self.item_name_input.toPlainText().strip())
+        self._database.set_setting("adjustment_item_type", self.item_type_input.text().strip())
         self._database.set_setting("adjustment_vat_rate", self.vat_rate_input.text().strip())
         self._database.set_setting("signing_pin", self.signing_pin_input.text())
         self._database.set_setting("record_run_mode", "all" if self.run_all_toggle.isChecked() else "custom")

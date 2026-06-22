@@ -13,6 +13,7 @@ ADJUSTMENT_TO_DATE = "01/02/2026"
 ADJUSTMENT_INVOICE_NUMBER = "01"
 ADJUSTMENT_REASON = "Bổ sung mã số thuế của người mua trên hóa đơn"
 ADJUSTMENT_ITEM_NAME = "Bổ sung thêm mã số thuế"
+ADJUSTMENT_ITEM_TYPE = "Ghi chú/diễn giải"
 ADJUSTMENT_VAT_RATE = "KHAC"
 MAX_CONCURRENT_TASKS = 1
 DEFAULT_RECORD_RUN_MODE = "custom"

@@ -17,6 +17,7 @@ from config.config import (
     ADJUSTMENT_FROM_DATE,
     ADJUSTMENT_INVOICE_NUMBER,
     ADJUSTMENT_ITEM_NAME,
+    ADJUSTMENT_ITEM_TYPE,
     ADJUSTMENT_FORM_MAX_RETRIES,
     ADJUSTMENT_REASON,
     ADJUSTMENT_TO_DATE,
@@ -475,6 +476,7 @@ class BrowserManager(QObject):
         self._runtime_settings = {
             "adjustment_reason": self._database.get_setting("adjustment_reason", ADJUSTMENT_REASON) or ADJUSTMENT_REASON,
             "adjustment_item_name": self._database.get_setting("adjustment_item_name", ADJUSTMENT_ITEM_NAME) or ADJUSTMENT_ITEM_NAME,
+            "adjustment_item_type": self._database.get_setting("adjustment_item_type", ADJUSTMENT_ITEM_TYPE) or ADJUSTMENT_ITEM_TYPE,
             "adjustment_vat_rate": self._database.get_setting("adjustment_vat_rate", ADJUSTMENT_VAT_RATE) or ADJUSTMENT_VAT_RATE,
             "max_concurrent_tasks": self._database.get_setting("max_concurrent_tasks", str(MAX_CONCURRENT_TASKS)) or "1",
             "record_run_mode": self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE,
@@ -788,7 +790,7 @@ class BrowserManager(QObject):
         return False
 
     def _fill_adjustment_form(self, page) -> bool:
-        """Fill buyer tax code, requested reason, first item description, and VAT rate."""
+        """Fill buyer tax code, item type, item description, and VAT rate."""
         try:
             self._select_adjustment_invoice_series(page)
             self._fill_buyer_tax_code(page)
@@ -804,6 +806,17 @@ class BrowserManager(QObject):
                 }"""
             )
             self._emit("\u0110\u00e3 nh\u1eadp l\u00fd do \u0111i\u1ec1u ch\u1ec9nh.")
+
+            first_item_type_cell = page.locator(
+                "#grdSAOrderViewDetail tbody tr:first-child td:nth-child(2)"
+            )
+            first_item_type_cell.wait_for(state="visible", timeout=10_000)
+            first_item_type_cell.click()
+            item_type_input = first_item_type_cell.locator("input, textarea").first
+            item_type_input.wait_for(state="visible", timeout=10_000)
+            item_type_input.fill(self._runtime_settings["adjustment_item_type"])
+            item_type_input.press("Enter")
+            self._emit("Đã nhập Tính chất HHDV.")
 
             first_item_cell = page.locator(
                 "#grdSAOrderViewDetail tbody tr:first-child td:nth-child(3)"
