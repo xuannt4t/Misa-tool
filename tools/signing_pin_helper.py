@@ -7,6 +7,7 @@ the watcher survive browser restarts and lets the user see its live status.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +62,9 @@ class SigningPinHelper(QWidget):
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         self._status = QLabel("Đang chờ popup ký số…")
         self._status.setWordWrap(True)
+        self._log_view = QTextEdit()
+        self._log_view.setReadOnly(True)
+        self._log_view.setFixedHeight(130)
 
         self._pin_input = QLineEdit(
             self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or ""
@@ -93,6 +98,8 @@ class SigningPinHelper(QWidget):
         layout.addLayout(form)
         layout.addLayout(buttons)
         layout.addWidget(self._status)
+        layout.addWidget(QLabel("Nhật ký hoạt động:"))
+        layout.addWidget(self._log_view)
 
         self._timer = QTimer(self)
         self._timer.setInterval(200)
@@ -124,10 +131,15 @@ class SigningPinHelper(QWidget):
             return
         if submit_pin_if_prompted(self._pin_input.text()):
             self._status.setText("Đã nhập PIN và xác nhận popup ký số.")
+            self._append_log("Đã tự động nhập PIN và xác nhận popup ký số.")
             return
         error = get_last_pin_submission_error()
         if error:
             self._status.setText(error)
+
+    def _append_log(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self._log_view.append(f"[{timestamp}] {message}")
 
     def _ensure_self_watcher(self) -> None:
         if self._self_watcher_started or not auto_restart_enabled(self._database):
