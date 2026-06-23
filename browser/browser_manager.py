@@ -74,6 +74,8 @@ class BrowserManager(QObject):
         self._job_failed = False
         self._job_error: str | None = None
         self._runtime_settings: dict[str, str] = {}
+        self._signing_pin = ""
+        self._pin_listener: threading.Thread | None = None
 
     def request_close(self) -> None:
         """Safe to call from the GUI thread; the worker performs actual cleanup."""
@@ -84,6 +86,11 @@ class BrowserManager(QObject):
         self._stop_requested.clear()
         try:
             ensure_runtime_directories()
+            self._database.initialize()
+            self._signing_pin = self._database.get_setting(
+                "signing_pin", DEFAULT_SIGNING_PIN
+            ) or ""
+            self._start_pin_listener()
             self._emit("Đang mở trình duyệt...")
             with sync_playwright() as playwright:
                 self._playwright = playwright
@@ -121,6 +128,28 @@ class BrowserManager(QObject):
             self.state_changed.emit(False)
             self._emit("Trình duyệt đã đóng.")
             self.finished.emit()
+
+    def _start_pin_listener(self) -> None:
+        """Watch Windows for signer PIN prompts throughout this worker's lifetime."""
+        if not self._signing_pin or self._pin_listener is not None:
+            return
+        self._pin_listener = threading.Thread(
+            target=self._listen_for_signing_pin,
+            name=f"MISA-pin-listener-{self._worker_id}",
+            daemon=True,
+        )
+        self._pin_listener.start()
+
+    def _listen_for_signing_pin(self) -> None:
+        """Fill a native signer prompt even while this tab is doing other work."""
+        while not self._stop_requested.is_set():
+            if submit_pin_if_prompted(self._signing_pin):
+                self._emit("Đã tự động nhập PIN cho ứng dụng ký số.")
+                # Give the signer time to close this prompt before checking for
+                # another one from a different browser worker.
+                self._stop_requested.wait(1)
+                continue
+            self._stop_requested.wait(0.25)
 
     def _launch_context(self, playwright: Playwright):
         try:
@@ -222,18 +251,21 @@ class BrowserManager(QObject):
                 self._emit("Không còn bản ghi phù hợp để chạy.")
                 return
             try:
-                self._emit("Đang chuyển tới trang điều chỉnh hóa đơn...")
-                page = self._navigate_to_adjustment_page(page)
-                self._ensure_working_year(page)
-                self._open_adjust_invoice_dialog(page)
-                self._search_adjustment_invoice(page)
-                self._select_first_adjustment_invoice(page)
-                if not self._fill_adjustment_form_with_retry(page):
-                    self._reset_current_demo_job()
-                    continue
-                self._emit("Đang lưu và phát hành hóa đơn điều chỉnh...")
-                self._save_adjustment_invoice(page)
-                self._emit("Đã lưu và phát hành hóa đơn điều chỉnh thành công.")
+                for attempt in range(1, 4):
+                    try:
+                        page = self._process_active_invoice(page)
+                        break
+                    except SkipInvoiceError:
+                        raise
+                    except Error as exc:
+                        if attempt == 3:
+                            raise
+                        self._emit(
+                            f"ID {self._active_invoice['id']} gặp lỗi; "
+                            f"đang thử lại ({attempt + 1}/3): {exc}"
+                        )
+                        if self._stop_requested.wait(attempt):
+                            raise Error("Đã dừng khi đang thử lại hóa đơn.")
             except (Error, SkipInvoiceError) as exc:
                 self._job_failed = True
                 self._job_error = str(exc)
@@ -244,6 +276,21 @@ class BrowserManager(QObject):
             if self._retry_invoice_id is not None:
                 return
             self._stop_requested.wait(0.8)
+
+    def _process_active_invoice(self, page):
+        """Run one invoice attempt; retries retain its publish turn and job."""
+        self._emit("Đang chuyển tới trang điều chỉnh hóa đơn...")
+        page = self._navigate_to_adjustment_page(page)
+        self._ensure_working_year(page)
+        self._open_adjust_invoice_dialog(page)
+        self._search_adjustment_invoice(page)
+        self._select_first_adjustment_invoice(page)
+        if not self._fill_adjustment_form_with_retry(page):
+            raise Error("Không thể nhập đầy đủ thông tin hóa đơn điều chỉnh.")
+        self._emit("Đang lưu và phát hành hóa đơn điều chỉnh...")
+        self._save_adjustment_invoice(page)
+        self._emit("Đã lưu và phát hành hóa đơn điều chỉnh thành công.")
+        return page
 
     def _navigate_to_adjustment_page(self, page):
         """Navigate resiliently when MISA is slow to finish loading auxiliary assets."""
@@ -335,6 +382,7 @@ class BrowserManager(QObject):
             # This warning is raised by MISA *after* the initial Save click,
             # not when the tax code is entered.  Confirm it before awaiting
             # the save response, otherwise the modal blocks the request.
+            self._update_customer_address_if_prompted(page, timeout=3_000)
             self._continue_save_invoice_if_prompted(page, timeout=3_000)
             self._publish_invoice_without_sending_to_customer(page)
         response = response_info.value
@@ -358,14 +406,29 @@ class BrowserManager(QObject):
 
         result = page.evaluate(
             """labelText => {
+                const visible = element => {
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    return rect.width > 0 && rect.height > 0
+                        && style.visibility !== 'hidden' && style.display !== 'none';
+                };
                 const label = [...document.querySelectorAll('.sendTemplateName')]
-                    .find(element => element.textContent.includes(labelText));
+                    .find(element => visible(element) && element.textContent.includes(labelText));
                 if (!label) return { found: false, checked: false };
-                let scope = label;
-                let checkbox = null;
-                for (let depth = 0; scope && depth < 4 && !checkbox; depth++, scope = scope.parentElement) {
-                    checkbox = scope.querySelector("input[type='checkbox']");
-                }
+                const labelRect = label.getBoundingClientRect();
+                const checkbox = [...document.querySelectorAll("input[type='checkbox']")]
+                    .filter(visible)
+                    .sort((left, right) => {
+                        const score = candidate => {
+                            const rect = candidate.getBoundingClientRect();
+                            const verticalDistance = Math.abs(
+                                (rect.top + rect.height / 2) - (labelRect.top + labelRect.height / 2)
+                            );
+                            const horizontalDistance = Math.abs(labelRect.left - rect.right);
+                            return verticalDistance * 1000 + horizontalDistance;
+                        };
+                        return score(left) - score(right);
+                    })[0];
                 if (!checkbox) return { found: false, checked: false };
                 if (checkbox.checked) checkbox.click();
                 return { found: true, checked: checkbox.checked };
@@ -376,40 +439,100 @@ class BrowserManager(QObject):
             raise Error("Không thể bỏ chọn gửi hóa đơn cho khách hàng trước khi phát hành.")
 
         self._emit("Đã bỏ chọn gửi hóa đơn cho khách hàng.")
-        publish_button.click()
-        self._confirm_publish_warning_if_prompted(page)
-        self._wait_for_publish_or_skip_kyso_unavailable(
-            page, publish_button, self._runtime_settings.get("signing_pin", "")
-        )
-        self._emit("Đã bấm Phát hành hóa đơn.")
+        for attempt in range(1, 4):
+            # MISA leaves this modal open after the "Số hóa đơn không liên tục"
+            # warning.  Re-find the button on every attempt because its dialog
+            # can be re-rendered while the warning is being dismissed.
+            publish_button = page.locator(
+                "input#btn-publish-invoice[data-command='Public']:visible"
+            ).last
+            publish_button.wait_for(state="visible", timeout=10_000)
+            publish_button.click()
+            self._confirm_publish_warning_if_prompted(page)
+            retry_reason = self._wait_for_publish_or_retry_after_warning(page, publish_button)
+            if retry_reason is None:
+                self._emit("Đã bấm Phát hành hóa đơn.")
+                return
 
-    def _wait_for_publish_or_skip_kyso_unavailable(self, page, publish_button, pin: str) -> None:
-        """Wait for publish completion but fail fast if the KYSO bridge is unavailable."""
+            if attempt < 3:
+                warning_label = (
+                    "cảnh báo số hóa đơn không liên tục"
+                    if retry_reason == "non_continuous_number"
+                    else "cảnh báo MISA KYSO chưa hoạt động"
+                )
+                self._emit(
+                    f"Đã đóng {warning_label}; "
+                    f"đang phát hành lại ({attempt + 1}/3)..."
+                )
+                page.wait_for_timeout(750)
+
+        raise Error(
+            "MISA vẫn hiển thị cảnh báo khi phát hành sau 3 lần thử."
+        )
+
+    def _wait_for_publish_or_retry_after_warning(self, page, publish_button) -> str | None:
+        """Wait for publishing; return the warning identifier when retrying is safe."""
         deadline = time.monotonic() + 30
-        pin_submitted = False
         while time.monotonic() < deadline:
-            self._skip_if_misa_kyso_unavailable(page, timeout=250)
-            if not pin_submitted and submit_pin_if_prompted(pin):
-                pin_submitted = True
-                self._emit("Đã gửi mã PIN cho ứng dụng ký số.")
+            if self._publish_success_toast_is_visible(page):
+                return None
+            if self._close_misa_kyso_warning_if_prompted(page, timeout=250):
+                return "kyso_unavailable"
+            if self._close_non_continuous_invoice_warning_if_prompted(page, timeout=250):
+                return "non_continuous_number"
             try:
                 if not publish_button.is_visible():
-                    return
+                    return None
             except Error:
                 # MISA can replace the publish dialog after a successful request.
-                return
+                return None
             page.wait_for_timeout(250)
         raise Error("MISA did not complete invoice publishing within 30 seconds.")
 
-    def _skip_if_misa_kyso_unavailable(self, page, timeout: int = 250) -> None:
-        """Close the KYSO-unavailable popup and mark this invoice as failed."""
-        dialog = page.locator("div[role='dialog']").filter(
+    def _publish_success_toast_is_visible(self, page) -> bool:
+        """MISA may keep the publish modal open after issuance already succeeded."""
+        toast = page.get_by_text("Cơ quan thuế đã cấp mã cho hóa đơn", exact=False).last
+        try:
+            return toast.is_visible()
+        except Error:
+            return False
+
+    def _close_non_continuous_invoice_warning_if_prompted(self, page, timeout: int = 250) -> bool:
+        """Dismiss MISA's transient numbering warning so publishing can be retried."""
+        dialog = page.locator(
+            "div[role='dialog']:visible, div.ui-dialog:visible, div.m-dialog:visible"
+        ).filter(has_text="Số hóa đơn không liên tục").last
+        try:
+            dialog.wait_for(state="visible", timeout=timeout)
+        except Error:
+            return False
+
+        close_button = dialog.locator("button.btn.blue:visible").filter(
+            has_text="Đóng"
+        ).last
+        if close_button.count() == 0:
+            close_button = dialog.get_by_role("button", name="Đóng", exact=True).last
+        close_button.wait_for(state="visible", timeout=3_000)
+        close_button.click()
+        try:
+            dialog.wait_for(state="hidden", timeout=5_000)
+        except Error:
+            # The modal is often removed and recreated by jQuery UI, so the
+            # original locator may not observe its disappearance reliably.
+            pass
+        return True
+
+    def _close_misa_kyso_warning_if_prompted(self, page, timeout: int = 250) -> bool:
+        """Dismiss a transient KYSO warning so publishing can be retried."""
+        dialog = page.locator(
+            "div[role='dialog']:visible, div.ui-dialog:visible, div.m-dialog:visible"
+        ).filter(
             has_text="Công cụ MISA KYSO chưa hoạt động"
         ).last
         try:
             dialog.wait_for(state="visible", timeout=timeout)
         except Error:
-            return
+            return False
 
         close_button = dialog.locator(
             "input[data-command='Cancel'][value='Đóng']:visible"
@@ -422,9 +545,7 @@ class BrowserManager(QObject):
             dialog.wait_for(state="hidden", timeout=5_000)
         except Error:
             pass
-        raise SkipInvoiceError(
-            "Công cụ MISA KYSO chưa hoạt động; đã bỏ qua bản ghi và đánh dấu lỗi."
-        )
+        return True
 
     def _confirm_publish_warning_if_prompted(self, page) -> None:
         """Accept MISA's explicit warning about an incomplete item name during publish."""
@@ -921,18 +1042,28 @@ class BrowserManager(QObject):
 
     def _update_customer_address_if_prompted(self, page, timeout: int = 750) -> None:
         """Accept either MISA customer-address refresh dialog after selecting its first option."""
-        dialog = page.locator("div[role='dialog']").filter(
-            has_text="Cập nhật địa chỉ khách hàng"
+        dialog = page.locator(
+            "div[role='dialog']:visible, div.ui-dialog:visible, div.m-dialog:visible"
+        ).filter(
+            has_text="Lấy thông tin khách hàng"
         ).last
+        legacy_dialog = page.locator(
+            "div[role='dialog']:visible, div.ui-dialog:visible, div.m-dialog:visible"
+        ).filter(has_text="Cập nhật địa chỉ khách hàng").last
         try:
             dialog.wait_for(state="visible", timeout=timeout)
         except Error:
-            # This prompt appears only when MISA detects a customer-address change.
-            return
+            dialog = legacy_dialog
+            try:
+                dialog.wait_for(state="visible", timeout=250)
+            except Error:
+                # This prompt appears only when MISA detects a customer-address change.
+                return
 
         # The detailed variant contains a customer-unit table and requires an
         # explicit radio choice before the update can be submitted.
         address_option = dialog.locator(
+            "#grdCustomerInfoOrg input[type='radio'][data-field='select'][name='select'], "
             "#grdUpdateAddressMisaData input[type='radio'][data-field='Select'][name='select']"
         ).first
         if address_option.count() > 0:
@@ -946,6 +1077,8 @@ class BrowserManager(QObject):
         ).last
         if update_button.count() == 0:
             update_button = dialog.get_by_role("button", name="Cập nhật ngay", exact=True)
+        if update_button.count() == 0:
+            update_button = dialog.get_by_role("button", name="Đồng ý", exact=True)
         update_button.wait_for(state="visible", timeout=5_000)
         update_button.click()
         dialog.wait_for(state="hidden", timeout=15_000)

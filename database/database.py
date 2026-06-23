@@ -93,6 +93,11 @@ class Database:
                 (key, value),
             )
 
+    def begin_invoice_run(self, run_mode: str, run_limit: int) -> None:
+        """Set one shared claim budget for the next browser run."""
+        remaining = -1 if run_mode == "all" else max(0, int(run_limit))
+        self.set_setting("active_run_remaining", str(remaining))
+
     def insert_invoices(self, invoices: list[dict[str, Any]]) -> int:
         if not invoices:
             return 0
@@ -156,13 +161,15 @@ class Database:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             try:
-                if run_mode == "custom":
-                    started = connection.execute(
-                        "SELECT COUNT(*) FROM invoices WHERE status = 1"
-                    ).fetchone()[0]
-                    if started >= run_limit:
-                        connection.execute("COMMIT")
-                        return None
+                remaining_row = connection.execute(
+                    "SELECT value FROM settings WHERE key = 'active_run_remaining'"
+                ).fetchone()
+                remaining = int(remaining_row[0]) if remaining_row else (
+                    -1 if run_mode == "all" else run_limit
+                )
+                if remaining == 0:
+                    connection.execute("COMMIT")
+                    return None
                 retry_filter = """
                       AND EXISTS (
                           SELECT 1 FROM processing_jobs AS retry_job
@@ -199,6 +206,12 @@ class Database:
                 if updated != 1:
                     connection.execute("ROLLBACK")
                     return None
+                if remaining > 0:
+                    connection.execute(
+                        "INSERT INTO settings(key, value) VALUES('active_run_remaining', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (str(remaining - 1),),
+                    )
                 connection.execute("COMMIT")
                 return row
             except Exception:
@@ -269,6 +282,38 @@ class Database:
             cursor = connection.execute("UPDATE invoices SET status = 0, error = NULL")
             connection.execute("DELETE FROM job_logs")
             connection.execute("DELETE FROM processing_jobs")
+            return cursor.rowcount
+
+    def reset_failed_invoices_by_ids(self, invoice_ids: list[int]) -> int:
+        """Return selected failed invoices to pending without touching other jobs."""
+        ids = [int(invoice_id) for invoice_id in invoice_ids]
+        if not ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in ids)
+        failed_invoice_ids_query = (
+            f"SELECT id FROM invoices WHERE status = 2 AND id IN ({placeholders})"
+        )
+        with sqlite3.connect(DATABASE_PATH) as connection:
+            connection.execute(
+                f"""
+                DELETE FROM job_logs
+                WHERE job_id IN (
+                    SELECT id FROM processing_jobs
+                    WHERE invoice_id IN ({failed_invoice_ids_query})
+                )
+                """,
+                ids,
+            )
+            connection.execute(
+                f"DELETE FROM processing_jobs WHERE invoice_id IN ({failed_invoice_ids_query})",
+                ids,
+            )
+            cursor = connection.execute(
+                f"UPDATE invoices SET status = 0, error = NULL "
+                f"WHERE status = 2 AND id IN ({placeholders})",
+                ids,
+            )
             return cursor.rowcount
 
     def sync_processing_jobs(self) -> int:

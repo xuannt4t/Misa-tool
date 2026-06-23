@@ -188,6 +188,11 @@ class MainWindow(QMainWindow):
             "QPushButton:disabled { background:#fecaca; color:#991b1b; }"
         )
         self.reset_status_button = QPushButton("Reset status")
+        self.reset_selected_failed_button = QPushButton("Reset lỗi đã chọn")
+        self.reset_selected_failed_button.setStyleSheet(
+            "QPushButton { background:#ea580c; color:white; border:0; border-radius:6px; padding:6px 14px; font-weight:700; }"
+            "QPushButton:hover { background:#c2410c; }"
+        )
         self.reset_status_button.setStyleSheet(
             "QPushButton { background:#dc2626; color:white; border:0; border-radius:6px; padding:6px 14px; font-weight:700; }"
             "QPushButton:hover { background:#b91c1c; }"
@@ -216,9 +221,16 @@ class MainWindow(QMainWindow):
         self.invoice_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.invoice_table.setAlternatingRowColors(True)
         self.invoice_table.horizontalHeader().setStretchLastSection(True)
+        self._updating_invoice_selection = False
+        self.invoice_table.horizontalHeader().sectionClicked.connect(self.toggle_page_invoice_selection)
+        self.invoice_table.itemChanged.connect(self.update_page_selection_header)
         self.previous_button = QPushButton("Trang tr\u01b0\u1edbc")
         self.next_button = QPushButton("Trang sau")
         self.page_label = QLabel()
+        self.page_size_label = QLabel("Hiển thị:")
+        self.page_size_input = QComboBox()
+        for page_size in (50, 100, 200, 500):
+            self.page_size_input.addItem(f"{page_size} dòng", page_size)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
@@ -246,6 +258,7 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.import_excel_button)
         search_layout.addWidget(self.delete_selected_button)
         search_layout.addWidget(self.delete_all_button)
+        search_layout.addWidget(self.reset_selected_failed_button)
         search_layout.addWidget(self.reset_status_button)
         self.done_invoice_count_label = QLabel()
         self.pending_invoice_count_label = QLabel()
@@ -264,6 +277,8 @@ class MainWindow(QMainWindow):
         pagination.addWidget(self.page_label)
         pagination.addWidget(self.next_button)
         pagination.addStretch()
+        pagination.addWidget(self.page_size_label)
+        pagination.addWidget(self.page_size_input)
         self.data_panel = QWidget()
         data_layout = QVBoxLayout()
         data_layout.setContentsMargins(0, 0, 0, 0)
@@ -290,7 +305,9 @@ class MainWindow(QMainWindow):
             "QPushButton { background:#2563eb; color:white; border:0; border-radius:7px; padding:8px 18px; font-weight:700; }"
             "QPushButton:hover { background:#1d4ed8; }"
         )
-        self.split_result_label = QLabel("Mỗi file xuất giữ hàng tiêu đề và có thể nhập lại trực tiếp.")
+        self.split_result_label = QLabel(
+            "Các sheet được gộp theo thứ tự trong file nguồn, rồi chia theo tổng số dòng mỗi file."
+        )
         self.split_result_label.setWordWrap(True)
         self.split_result_label.setStyleSheet("color:#64748b;")
         self.split_panel = QWidget()
@@ -323,6 +340,12 @@ class MainWindow(QMainWindow):
         self.jobs_page_size = 12
         self._selected_job_id: int | None = None
         self._job_filter = "running"
+        self.worker_table = QTableWidget()
+        self.worker_table.setColumnCount(4)
+        self.worker_table.setHorizontalHeaderLabels(["Worker", "PID", "Trạng thái", "Thao tác"])
+        self.worker_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.worker_table.setFixedHeight(118)
+        self.worker_table.horizontalHeader().setStretchLastSection(True)
         self.job_tabs = QTabBar()
         self.job_tabs.addTab("Đang xử lý")
         self.job_tabs.addTab("Đã hoàn thành")
@@ -387,6 +410,8 @@ class MainWindow(QMainWindow):
         self.jobs_panel = QWidget()
         jobs_layout = QVBoxLayout(self.jobs_panel)
         jobs_layout.setContentsMargins(0, 0, 0, 0)
+        jobs_layout.addWidget(QLabel("Worker đang chạy"))
+        jobs_layout.addWidget(self.worker_table)
         jobs_layout.addWidget(self.job_tabs)
         jobs_layout.addWidget(self.summary_bar)
         jobs_layout.addWidget(jobs_splitter)
@@ -498,6 +523,7 @@ class MainWindow(QMainWindow):
         self.import_excel_button.clicked.connect(self.import_excel)
         self.delete_selected_button.clicked.connect(self.delete_selected_invoices)
         self.delete_all_button.clicked.connect(self.delete_all_invoices)
+        self.reset_selected_failed_button.clicked.connect(self.reset_selected_failed_invoices)
         self.reset_status_button.clicked.connect(self.reset_all_statuses)
         self.jobs_button.clicked.connect(self.show_jobs)
         self.config_button.clicked.connect(self.show_config)
@@ -506,6 +532,7 @@ class MainWindow(QMainWindow):
         self.search_input.textChanged.connect(self.on_search_changed)
         self.mst2_filter_input.currentIndexChanged.connect(self.on_invoice_filter_changed)
         self.status_filter_input.currentIndexChanged.connect(self.on_invoice_filter_changed)
+        self.page_size_input.currentIndexChanged.connect(self.on_page_size_changed)
         self.previous_button.clicked.connect(self.previous_page)
         self.next_button.clicked.connect(self.next_page)
         self.jobs_previous_button.clicked.connect(self.previous_jobs_page)
@@ -527,6 +554,13 @@ class MainWindow(QMainWindow):
         worker_count = 1 if retry_invoice_id is not None else int(
             self._database.get_setting("max_concurrent_tasks", str(MAX_CONCURRENT_TASKS)) or 1
         )
+        if retry_invoice_id is None:
+            run_mode = self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE
+            run_limit = int(
+                self._database.get_setting("record_run_limit", str(DEFAULT_RECORD_RUN_LIMIT))
+                or DEFAULT_RECORD_RUN_LIMIT
+            )
+            self._database.begin_invoice_run(run_mode, run_limit)
         self._worker_processes = []
         self._active_worker_count = worker_count
         for worker_id in range(1, worker_count + 1):
@@ -538,15 +572,19 @@ class MainWindow(QMainWindow):
                 name=f"MISA-browser-worker-{worker_id}",
             )
             self._worker_processes.append({
+                "worker_id": worker_id,
                 "process": process,
                 "queue": event_queue,
                 "stop_event": stop_event,
                 "finished": False,
+                "status": "Đang khởi động",
             })
         self.open_button.setEnabled(False)
         self._worker_event_timer.start()
         for handle in self._worker_processes:
             handle["process"].start()
+            handle["status"] = "Đang chạy"
+        self.refresh_worker_table()
         self.open_button.setText("●  Đang chạy MISA")
 
     def close_browser(self) -> None:
@@ -555,6 +593,32 @@ class MainWindow(QMainWindow):
             self.close_button.setEnabled(False)
             for handle in self._worker_processes:
                 handle["stop_event"].set()
+                handle["status"] = "Đang dừng"
+            self.refresh_worker_table()
+
+    def stop_worker(self, handle: dict) -> None:
+        """Request one worker to stop; its active invoice is finalized as an error."""
+        if handle["finished"] or not handle["process"].is_alive():
+            return
+        handle["stop_event"].set()
+        handle["status"] = "Đang dừng"
+        self.append_log(
+            f"Đã yêu cầu dừng Worker {handle['worker_id']}; hóa đơn đang chạy sẽ được đánh dấu lỗi."
+        )
+        self.refresh_worker_table()
+
+    def refresh_worker_table(self) -> None:
+        self.worker_table.setRowCount(len(self._worker_processes))
+        for row, handle in enumerate(self._worker_processes):
+            process = handle["process"]
+            self.worker_table.setItem(row, 0, QTableWidgetItem(str(handle["worker_id"])))
+            self.worker_table.setItem(row, 1, QTableWidgetItem(str(process.pid or "-")))
+            status = "Đã dừng" if handle["finished"] else handle.get("status", "Đang chạy")
+            self.worker_table.setItem(row, 2, QTableWidgetItem(status))
+            button = QPushButton("Dừng worker")
+            button.setEnabled(process.is_alive() and not handle["finished"])
+            button.clicked.connect(lambda _checked=False, current=handle: self.stop_worker(current))
+            self.worker_table.setCellWidget(row, 3, button)
 
     def on_browser_state_changed(self, is_open: bool) -> None:
         self.close_button.setEnabled(is_open or self._active_worker_count > 0)
@@ -576,11 +640,13 @@ class MainWindow(QMainWindow):
                     self._on_worker_process_finished(handle)
             if not handle["process"].is_alive() and not handle["finished"]:
                 self._on_worker_process_finished(handle)
+        self.refresh_worker_table()
 
     def _on_worker_process_finished(self, handle: dict) -> None:
         if handle["finished"]:
             return
         handle["finished"] = True
+        handle["status"] = "Đã dừng"
         process = handle["process"]
         process.join(timeout=0.1)
         self._active_worker_count -= 1
@@ -847,6 +913,87 @@ class MainWindow(QMainWindow):
         if self.data_panel.isVisible():
             self.load_invoices()
 
+    def reset_selected_failed_invoices(self) -> None:
+        if any(handle["process"].is_alive() for handle in self._worker_processes):
+            QMessageBox.warning(
+                self,
+                "Không thể reset khi đang chạy",
+                "Hãy dừng MISA trước khi reset các bản ghi lỗi.",
+            )
+            return
+
+        selected_ids = self._selected_invoice_ids_on_page()
+        if not selected_ids:
+            QMessageBox.information(
+                self,
+                "Chưa chọn bản ghi",
+                "Hãy tick các bản ghi lỗi cần reset, hoặc bấm tiêu đề cột Chọn để tick cả trang.",
+            )
+            return
+
+        confirmation = QMessageBox.question(
+            self,
+            "Reset bản ghi lỗi đã chọn",
+            f"Đưa các bản ghi lỗi đã chọn về trạng thái chưa thực hiện? ({len(selected_ids)} dòng được chọn)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+
+        reset_count = self._database.reset_failed_invoices_by_ids(selected_ids)
+        if reset_count == 0:
+            QMessageBox.information(
+                self, "Không có bản ghi lỗi", "Các dòng đã chọn không còn ở trạng thái lỗi."
+            )
+            return
+        self.append_log(f"Đã reset {reset_count} bản ghi lỗi đã chọn về trạng thái chưa thực hiện.")
+        self.load_invoices()
+
+    def _selected_invoice_ids_on_page(self) -> list[int]:
+        selected_ids: list[int] = []
+        for row_index in range(self.invoice_table.rowCount()):
+            item = self.invoice_table.item(row_index, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                invoice_id = item.data(Qt.ItemDataRole.UserRole)
+                if invoice_id is not None:
+                    selected_ids.append(int(invoice_id))
+        return selected_ids
+
+    def toggle_page_invoice_selection(self, section: int) -> None:
+        """Toggle checkboxes only for the currently visible invoice page."""
+        if section != 0 or self.invoice_table.rowCount() == 0:
+            return
+        select_all = any(
+            self.invoice_table.item(row, 0).checkState() != Qt.CheckState.Checked
+            for row in range(self.invoice_table.rowCount())
+            if self.invoice_table.item(row, 0) is not None
+        )
+        self._updating_invoice_selection = True
+        try:
+            for row in range(self.invoice_table.rowCount()):
+                item = self.invoice_table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(
+                        Qt.CheckState.Checked if select_all else Qt.CheckState.Unchecked
+                    )
+        finally:
+            self._updating_invoice_selection = False
+        self.update_page_selection_header()
+
+    def update_page_selection_header(self, _item=None) -> None:
+        if self._updating_invoice_selection:
+            return
+        total = self.invoice_table.rowCount()
+        all_selected = total > 0 and all(
+            self.invoice_table.item(row, 0) is not None
+            and self.invoice_table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in range(total)
+        )
+        header_item = self.invoice_table.horizontalHeaderItem(0)
+        if header_item is not None:
+            header_item.setText("☑ Chọn" if all_selected else "☐ Chọn")
+
     def delete_selected_invoices(self) -> None:
         if any(handle["process"].is_alive() for handle in self._worker_processes):
             QMessageBox.warning(
@@ -927,6 +1074,11 @@ class MainWindow(QMainWindow):
         self._page = 1
         self.load_invoices()
 
+    def on_page_size_changed(self) -> None:
+        self._page_size = int(self.page_size_input.currentData())
+        self._page = 1
+        self.load_invoices()
+
     def previous_page(self) -> None:
         if self._page > 1:
             self._page -= 1
@@ -952,6 +1104,7 @@ class MainWindow(QMainWindow):
         if not rows and self._page > 1:
             self._page -= 1
             return self.load_invoices()
+        self._updating_invoice_selection = True
         self.invoice_table.setRowCount(len(rows))
         keys = ("id", "thang", "a", "khmhd", "hoa_don", "date", "ten_khach_hang", "dia_chi", "mst1", "mst2", "row", "status", "error")
         for row_index, row in enumerate(rows):
@@ -969,6 +1122,8 @@ class MainWindow(QMainWindow):
                     item.setBackground(QColor("#fee2e2"))
                     item.setForeground(QColor("#991b1b"))
                 self.invoice_table.setItem(row_index, column_index, item)
+        self._updating_invoice_selection = False
+        self.update_page_selection_header()
         # Always start at the first column after loading/filtering. Otherwise a
         # previously scrolled viewport can crop the leading digits of KHMHĐ and
         # invoice numbers, making valid values look as if zeroes were missing.
