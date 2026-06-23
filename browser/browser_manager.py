@@ -76,6 +76,9 @@ class BrowserManager(QObject):
         self._runtime_settings: dict[str, str] = {}
         self._signing_pin = ""
         self._pin_listener: threading.Thread | None = None
+        self._login_submission_attempted = False
+        self._login_wait_notice_shown = False
+        self._otp_wait_notice_shown = False
 
     def request_close(self) -> None:
         """Safe to call from the GUI thread; the worker performs actual cleanup."""
@@ -239,10 +242,53 @@ class BrowserManager(QObject):
                     if self._is_authenticated_misa_page(page):
                         self._emit(f"Đã phát hiện phiên MISA đăng nhập tại: {page.url}")
                         return page
+                    self._submit_misa_login_if_configured(page)
             except Error:
                 return None
             self._stop_requested.wait(0.5)
         return None
+
+    def _submit_misa_login_if_configured(self, page) -> None:
+        """Fill MISA's two-step login form once; OTP is always left to the user."""
+        try:
+            otp_input = page.locator("input[name='name']").first
+            if otp_input.is_visible(timeout=200):
+                if not self._otp_wait_notice_shown:
+                    self._emit("MISA yêu cầu OTP. Vui lòng nhập OTP trên Chrome để tiếp tục.")
+                    self._otp_wait_notice_shown = True
+                return
+
+            tax_code = page.locator("#TaxCode")
+            if not tax_code.is_visible(timeout=200):
+                return
+            if self._login_submission_attempted:
+                return
+            if self._database.get_setting("auto_login_misa", "0") != "1":
+                if not self._login_wait_notice_shown:
+                    self._emit("MISA yêu cầu đăng nhập. Vui lòng đăng nhập trên Chrome.")
+                    self._login_wait_notice_shown = True
+                return
+
+            username = self._database.get_setting("misa_username", "") or ""
+            password = self._database.get_setting("misa_password", "") or ""
+            configured_tax_code = self._database.get_setting("misa_tax_code", "") or ""
+            if not configured_tax_code or not username or not password:
+                if not self._login_wait_notice_shown:
+                    self._emit("Thiếu cấu hình đăng nhập MISA tự động. Vui lòng đăng nhập trên Chrome.")
+                    self._login_wait_notice_shown = True
+                return
+
+            self._login_submission_attempted = True
+            tax_code.fill(configured_tax_code)
+            page.locator("#UserName").fill(username)
+            page.locator("#LoginForm input[type='submit'], #LoginForm button[type='submit']").last.click()
+            password_input = page.locator("#Password")
+            password_input.wait_for(state="visible", timeout=10_000)
+            password_input.fill(password)
+            page.locator("#btnLogin").click()
+            self._emit("Đã gửi thông tin đăng nhập MISA; đang chờ xác thực.")
+        except Error as exc:
+            self._emit(f"Không thể tự đăng nhập MISA: {exc}")
 
     def _process_pending_invoices(self, page) -> None:
         """Process pending invoices sequentially until quota, data, or user stop."""
@@ -280,7 +326,7 @@ class BrowserManager(QObject):
     def _process_active_invoice(self, page):
         """Run one invoice attempt; retries retain its publish turn and job."""
         self._emit("Đang chuyển tới trang điều chỉnh hóa đơn...")
-        page = self._navigate_to_adjustment_page(page)
+        page = self._reuse_or_navigate_to_adjustment_page(page)
         self._ensure_working_year(page)
         self._open_adjust_invoice_dialog(page)
         self._search_adjustment_invoice(page)
@@ -291,6 +337,20 @@ class BrowserManager(QObject):
         self._save_adjustment_invoice(page)
         self._emit("Đã lưu và phát hành hóa đơn điều chỉnh thành công.")
         return page
+
+    def _reuse_or_navigate_to_adjustment_page(self, page):
+        """Reuse a ready adjustment page only when the optional optimization is enabled."""
+        if self._runtime_settings.get("reuse_adjustment_page") == "1":
+            try:
+                if "/v3/xu-ly-hd/dieu-chinh" in page.url.lower():
+                    page.locator(
+                        "button[data-command='CreateAdjustInvoice']:visible"
+                    ).last.wait_for(state="visible", timeout=1_500)
+                    self._emit("Tái sử dụng trang điều chỉnh đang sẵn sàng.")
+                    return page
+            except Error:
+                pass
+        return self._navigate_to_adjustment_page(page)
 
     def _navigate_to_adjustment_page(self, page):
         """Navigate resiliently when MISA is slow to finish loading auxiliary assets."""
@@ -603,6 +663,7 @@ class BrowserManager(QObject):
             "record_run_mode": self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE,
             "record_run_limit": self._database.get_setting("record_run_limit", str(DEFAULT_RECORD_RUN_LIMIT)) or str(DEFAULT_RECORD_RUN_LIMIT),
             "signing_pin": self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or "",
+            "reuse_adjustment_page": self._database.get_setting("reuse_adjustment_page", "0") or "0",
         }
         self._active_job_id = self._database.start_demo_job(row["id"])
         self._job_started_at = time.monotonic()

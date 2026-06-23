@@ -421,8 +421,12 @@ class MainWindow(QMainWindow):
         jobs_layout.addLayout(jobs_pagination)
         jobs_layout.setStretch(2, 1)
         self.jobs_panel.hide()
-        self.config_panel = QWidget()
-        config_form = QFormLayout(self.config_panel)
+        config_content = QWidget()
+        self.config_panel = QScrollArea()
+        self.config_panel.setWidgetResizable(True)
+        self.config_panel.setFrameShape(QFrame.Shape.NoFrame)
+        self.config_panel.setWidget(config_content)
+        config_form = QFormLayout(config_content)
         config_form.setContentsMargins(28, 20, 28, 20)
         self.concurrent_tasks_input = QSpinBox()
         self.concurrent_tasks_input.setRange(1, 20)
@@ -446,6 +450,27 @@ class MainWindow(QMainWindow):
         self.vat_rate_input = QLineEdit()
         self.signing_pin_input = QLineEdit()
         self.signing_pin_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.auto_login_misa_toggle = ToggleSwitch("Tự đăng nhập MISA")
+        self.misa_tax_code_input = QLineEdit()
+        self.misa_tax_code_input.setPlaceholderText("MST hoặc CCCD chủ hộ")
+        self.misa_username_input = QLineEdit()
+        self.misa_username_input.setPlaceholderText("Email hoặc số điện thoại")
+        self.misa_password_input = QLineEdit()
+        self.misa_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.misa_password_input.setPlaceholderText("Mật khẩu MISA")
+        self.misa_password_visibility_button = QPushButton("👁")
+        self.misa_password_visibility_button.setCheckable(True)
+        self.misa_password_visibility_button.setFixedSize(34, 34)
+        self.misa_password_visibility_button.setToolTip("Hiển thị mật khẩu MISA")
+        self.misa_password_visibility_button.toggled.connect(
+            self._toggle_misa_password_visibility
+        )
+        misa_password_widget = QWidget()
+        misa_password_layout = QHBoxLayout(misa_password_widget)
+        misa_password_layout.setContentsMargins(0, 0, 0, 0)
+        misa_password_layout.setSpacing(6)
+        misa_password_layout.addWidget(self.misa_password_input)
+        misa_password_layout.addWidget(self.misa_password_visibility_button)
         self.auto_restart_apps_toggle = ToggleSwitch("Tự chạy lại app khi bị đóng")
         self.auto_restart_apps_toggle.setToolTip(
             "Áp dụng cho MISA Auto Tool và Trợ lý ký số. Tắt trước khi đóng nếu không muốn app tự mở lại."
@@ -453,6 +478,12 @@ class MainWindow(QMainWindow):
         self.auto_open_misa_toggle = ToggleSwitch("Tự mở MISA sau 30 giây")
         self.auto_open_misa_toggle.setToolTip(
             "Khi mở MISA Auto Tool, tự khởi động quy trình Mở MISA sau 30 giây."
+        )
+        self.reuse_adjustment_page_toggle = ToggleSwitch(
+            "Tái sử dụng trang điều chỉnh giữa các bản ghi"
+        )
+        self.reuse_adjustment_page_toggle.setToolTip(
+            "Chỉ bỏ qua tải lại trang khi MISA vẫn đang ở đúng trang điều chỉnh và nút tạo hóa đơn sẵn sàng."
         )
         self.signing_pin_input.setPlaceholderText("Nhập mã PIN ký số")
         self.pin_visibility_button = QPushButton("👁")
@@ -475,6 +506,9 @@ class MainWindow(QMainWindow):
             self.item_type_input,
             self.vat_rate_input,
             self.signing_pin_input,
+            self.misa_tax_code_input,
+            self.misa_username_input,
+            self.misa_password_input,
         ):
             editable.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             editable.setMinimumHeight(34)
@@ -498,8 +532,13 @@ class MainWindow(QMainWindow):
         config_form.addRow("T\u00ednh ch\u1ea5t HHDV:", self.item_type_input)
         config_form.addRow("Thu\u1ebf GTGT:", self.vat_rate_input)
         config_form.addRow("Mã PIN ký số:", pin_input_widget)
+        config_form.addRow("Đăng nhập tự động:", self.auto_login_misa_toggle)
+        config_form.addRow("MST/CCCD MISA:", self.misa_tax_code_input)
+        config_form.addRow("Email/SĐT MISA:", self.misa_username_input)
+        config_form.addRow("Mật khẩu MISA:", misa_password_widget)
         config_form.addRow("Tự khởi động lại:", self.auto_restart_apps_toggle)
         config_form.addRow("Tự chạy:", self.auto_open_misa_toggle)
+        config_form.addRow("Tối ưu tốc độ:", self.reuse_adjustment_page_toggle)
         config_form.addRow("", save_row)
         self.config_help = QLabel("Tham số dùng được: {ten_khach_hang}, {mst2}, {hoa_don}, {date}")
         self.config_help.setStyleSheet("color:#64748b;")
@@ -729,9 +768,18 @@ class MainWindow(QMainWindow):
         self.signing_pin_input.setText(
             self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or ""
         )
+        self.auto_login_misa_toggle.setChecked(
+            self._database.get_setting("auto_login_misa", "0") == "1"
+        )
+        self.misa_tax_code_input.setText(self._database.get_setting("misa_tax_code", "") or "")
+        self.misa_username_input.setText(self._database.get_setting("misa_username", "") or "")
+        self.misa_password_input.setText(self._database.get_setting("misa_password", "") or "")
         self.auto_restart_apps_toggle.setChecked(auto_restart_enabled(self._database))
         self.auto_open_misa_toggle.setChecked(
             self._database.get_setting("auto_open_misa_on_start", "0") == "1"
+        )
+        self.reuse_adjustment_page_toggle.setChecked(
+            self._database.get_setting("reuse_adjustment_page", "0") == "1"
         )
         run_mode = self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE
         self.run_all_toggle.setChecked(run_mode == "all")
@@ -744,6 +792,14 @@ class MainWindow(QMainWindow):
         )
         self.pin_visibility_button.setToolTip(
             "Ẩn mã PIN ký số" if visible else "Hiển thị mã PIN ký số"
+        )
+
+    def _toggle_misa_password_visibility(self, visible: bool) -> None:
+        self.misa_password_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
+        self.misa_password_visibility_button.setToolTip(
+            "Ẩn mật khẩu MISA" if visible else "Hiển thị mật khẩu MISA"
         )
 
     def _ensure_self_watcher(self) -> None:
@@ -784,10 +840,19 @@ class MainWindow(QMainWindow):
         self._database.set_setting("adjustment_vat_rate", self.vat_rate_input.text().strip())
         self._database.set_setting("signing_pin", self.signing_pin_input.text())
         self._database.set_setting(
+            "auto_login_misa", "1" if self.auto_login_misa_toggle.isChecked() else "0"
+        )
+        self._database.set_setting("misa_tax_code", self.misa_tax_code_input.text().strip())
+        self._database.set_setting("misa_username", self.misa_username_input.text().strip())
+        self._database.set_setting("misa_password", self.misa_password_input.text())
+        self._database.set_setting(
             AUTO_RESTART_SETTING, "1" if self.auto_restart_apps_toggle.isChecked() else "0"
         )
         self._database.set_setting(
             "auto_open_misa_on_start", "1" if self.auto_open_misa_toggle.isChecked() else "0"
+        )
+        self._database.set_setting(
+            "reuse_adjustment_page", "1" if self.reuse_adjustment_page_toggle.isChecked() else "0"
         )
         self._database.set_setting("record_run_mode", "all" if self.run_all_toggle.isChecked() else "custom")
         self._database.set_setting("record_run_limit", str(self.record_limit_input.value()))
