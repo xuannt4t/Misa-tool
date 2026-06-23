@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import html
 import multiprocessing
+import time
 from queue import Empty
 from datetime import datetime
 from pathlib import Path
@@ -120,6 +121,8 @@ class MainWindow(QMainWindow):
         self._process_context = multiprocessing.get_context("spawn")
         self._worker_processes: list[dict] = []
         self._active_worker_count = 0
+        self._stop_in_progress = False
+        self._stop_deadline = 0.0
         self._database = Database()
         self._self_watcher_started = False
         self._auto_open_misa_scheduled = False
@@ -642,13 +645,34 @@ class MainWindow(QMainWindow):
         self.open_button.setText("●  Đang chạy MISA")
 
     def close_browser(self) -> None:
-        if self._worker_processes:
-            self.append_log("Đang đóng trình duyệt...")
-            self.close_button.setEnabled(False)
-            for handle in self._worker_processes:
-                handle["stop_event"].set()
-                handle["status"] = "Đang dừng"
-            self.refresh_worker_table()
+        if not self._worker_processes or self._stop_in_progress:
+            return
+        self._stop_in_progress = True
+        self._stop_deadline = time.monotonic() + 5
+        self.append_log("Đang dừng toàn bộ worker và trả các job chưa hoàn tất về chờ...")
+        self.close_button.setEnabled(False)
+        for handle in self._worker_processes:
+            handle["stop_event"].set()
+            handle["status"] = "Đang dừng"
+        self.refresh_worker_table()
+        QTimer.singleShot(100, self._finish_stopping_workers)
+
+    def _finish_stopping_workers(self) -> None:
+        active_handles = [
+            handle for handle in self._worker_processes if handle["process"].is_alive()
+        ]
+        if active_handles and time.monotonic() < self._stop_deadline:
+            QTimer.singleShot(100, self._finish_stopping_workers)
+            return
+        for handle in active_handles:
+            handle["process"].terminate()
+            handle["process"].join(timeout=0.5)
+        reset_count = self._database.reset_cancelled_jobs()
+        self._stop_in_progress = False
+        self.append_log(
+            f"Đã dừng MISA. Đã trả {reset_count} job chưa hoàn tất về trạng thái chờ."
+        )
+        self._poll_worker_events()
 
     def stop_worker(self, handle: dict) -> None:
         """Request one worker to stop; its active invoice is finalized as an error."""

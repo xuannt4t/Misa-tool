@@ -43,6 +43,9 @@ class SkipInvoiceError(Exception):
     """A known MISA validation case: finish this job as error without retrying it."""
 
 
+USER_STOPPED_JOB_ERROR = "Stopped by user request."
+
+
 class BrowserManager(QObject):
     log_message = Signal(str)
     job_progress_changed = Signal()
@@ -121,7 +124,7 @@ class BrowserManager(QObject):
         finally:
             if self._stop_requested.is_set() and self._active_job_id is not None:
                 self._job_failed = True
-                self._job_error = "Người dùng đã dừng worker khi job đang chạy."
+                self._job_error = USER_STOPPED_JOB_ERROR
             self._reset_current_demo_job()
             # ``sync_playwright()`` owns the browser context and closes it as
             # the ``with`` block exits.  Calling close here happens after its

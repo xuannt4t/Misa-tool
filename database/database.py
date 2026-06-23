@@ -284,6 +284,33 @@ class Database:
             connection.execute("DELETE FROM processing_jobs")
             return cursor.rowcount
 
+    def reset_cancelled_jobs(self) -> int:
+        """Return jobs stopped by the user, or left running after termination, to pending."""
+        with sqlite3.connect(DATABASE_PATH) as connection:
+            rows = connection.execute(
+                """
+                SELECT invoice_id FROM processing_jobs
+                WHERE status = 'running'
+                   OR (status = 'error' AND error = 'Stopped by user request.')
+                """
+            ).fetchall()
+            invoice_ids = [row[0] for row in rows]
+            if not invoice_ids:
+                return 0
+            placeholders = ", ".join("?" for _ in invoice_ids)
+            connection.execute(
+                f"DELETE FROM job_logs WHERE job_id IN (SELECT id FROM processing_jobs WHERE invoice_id IN ({placeholders}))",
+                invoice_ids,
+            )
+            connection.execute(
+                f"DELETE FROM processing_jobs WHERE invoice_id IN ({placeholders})", invoice_ids
+            )
+            connection.execute(
+                f"UPDATE invoices SET status = 0, error = NULL WHERE id IN ({placeholders})",
+                invoice_ids,
+            )
+            return len(invoice_ids)
+
     def reset_failed_invoices_by_ids(self, invoice_ids: list[int]) -> int:
         """Return selected failed invoices to pending without touching other jobs."""
         ids = [int(invoice_id) for invoice_id in invoice_ids]
