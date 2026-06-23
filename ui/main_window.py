@@ -24,6 +24,7 @@ from config.config import (
 from database.database import Database
 from services.excel_reader import read_invoices_excel
 from services.excel_splitter import split_excel_workbook
+from services.self_watcher import AUTO_RESTART_SETTING, auto_restart_enabled, start_self_watcher
 from workers.browser_process import run_browser_worker
 
 
@@ -120,6 +121,8 @@ class MainWindow(QMainWindow):
         self._worker_processes: list[dict] = []
         self._active_worker_count = 0
         self._database = Database()
+        self._self_watcher_started = False
+        self._auto_open_misa_scheduled = False
         self._page = 1
         self._page_size = 50
         self._worker_event_timer = QTimer(self)
@@ -443,6 +446,14 @@ class MainWindow(QMainWindow):
         self.vat_rate_input = QLineEdit()
         self.signing_pin_input = QLineEdit()
         self.signing_pin_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.auto_restart_apps_toggle = ToggleSwitch("Tự chạy lại app khi bị đóng")
+        self.auto_restart_apps_toggle.setToolTip(
+            "Áp dụng cho MISA Auto Tool và Trợ lý ký số. Tắt trước khi đóng nếu không muốn app tự mở lại."
+        )
+        self.auto_open_misa_toggle = ToggleSwitch("Tự mở MISA sau 30 giây")
+        self.auto_open_misa_toggle.setToolTip(
+            "Khi mở MISA Auto Tool, tự khởi động quy trình Mở MISA sau 30 giây."
+        )
         self.signing_pin_input.setPlaceholderText("Nhập mã PIN ký số")
         self.pin_visibility_button = QPushButton("👁")
         self.pin_visibility_button.setCheckable(True)
@@ -487,6 +498,8 @@ class MainWindow(QMainWindow):
         config_form.addRow("T\u00ednh ch\u1ea5t HHDV:", self.item_type_input)
         config_form.addRow("Thu\u1ebf GTGT:", self.vat_rate_input)
         config_form.addRow("Mã PIN ký số:", pin_input_widget)
+        config_form.addRow("Tự khởi động lại:", self.auto_restart_apps_toggle)
+        config_form.addRow("Tự chạy:", self.auto_open_misa_toggle)
         config_form.addRow("", save_row)
         self.config_help = QLabel("Tham số dùng được: {ten_khach_hang}, {mst2}, {hoa_don}, {date}")
         self.config_help.setStyleSheet("color:#64748b;")
@@ -540,6 +553,8 @@ class MainWindow(QMainWindow):
         self.job_tabs.currentChanged.connect(self.on_job_tab_changed)
         self.retry_job_button.clicked.connect(self.retry_all_failed_jobs)
         self.load_config()
+        self._ensure_self_watcher()
+        self._schedule_auto_open_misa()
 
     def open_misa(
         self,
@@ -714,6 +729,10 @@ class MainWindow(QMainWindow):
         self.signing_pin_input.setText(
             self._database.get_setting("signing_pin", DEFAULT_SIGNING_PIN) or ""
         )
+        self.auto_restart_apps_toggle.setChecked(auto_restart_enabled(self._database))
+        self.auto_open_misa_toggle.setChecked(
+            self._database.get_setting("auto_open_misa_on_start", "0") == "1"
+        )
         run_mode = self._database.get_setting("record_run_mode", DEFAULT_RECORD_RUN_MODE) or DEFAULT_RECORD_RUN_MODE
         self.run_all_toggle.setChecked(run_mode == "all")
         self.record_limit_input.setValue(int(self._database.get_setting("record_run_limit", str(DEFAULT_RECORD_RUN_LIMIT)) or DEFAULT_RECORD_RUN_LIMIT))
@@ -726,6 +745,27 @@ class MainWindow(QMainWindow):
         self.pin_visibility_button.setToolTip(
             "Ẩn mã PIN ký số" if visible else "Hiển thị mã PIN ký số"
         )
+
+    def _ensure_self_watcher(self) -> None:
+        if self._self_watcher_started or not auto_restart_enabled(self._database):
+            return
+        start_self_watcher(Path(__file__).resolve().parents[1] / "main.py")
+        self._self_watcher_started = True
+
+    def _schedule_auto_open_misa(self) -> None:
+        if self._auto_open_misa_scheduled or self._database.get_setting(
+            "auto_open_misa_on_start", "0"
+        ) != "1":
+            return
+        self._auto_open_misa_scheduled = True
+        self.append_log("Sẽ tự mở MISA sau 30 giây.")
+        QTimer.singleShot(30_000, self._open_misa_if_enabled)
+
+    def _open_misa_if_enabled(self) -> None:
+        self._auto_open_misa_scheduled = False
+        if self._database.get_setting("auto_open_misa_on_start", "0") == "1":
+            self.append_log("Đang tự mở MISA theo cấu hình.")
+            self.open_misa()
 
     def save_config(self) -> None:
         confirmation = QMessageBox.question(
@@ -743,8 +783,16 @@ class MainWindow(QMainWindow):
         self._database.set_setting("adjustment_item_type", self.item_type_input.text().strip())
         self._database.set_setting("adjustment_vat_rate", self.vat_rate_input.text().strip())
         self._database.set_setting("signing_pin", self.signing_pin_input.text())
+        self._database.set_setting(
+            AUTO_RESTART_SETTING, "1" if self.auto_restart_apps_toggle.isChecked() else "0"
+        )
+        self._database.set_setting(
+            "auto_open_misa_on_start", "1" if self.auto_open_misa_toggle.isChecked() else "0"
+        )
         self._database.set_setting("record_run_mode", "all" if self.run_all_toggle.isChecked() else "custom")
         self._database.set_setting("record_run_limit", str(self.record_limit_input.value()))
+        self._ensure_self_watcher()
+        self._schedule_auto_open_misa()
         QMessageBox.information(
             self,
             "Đã lưu cấu hình",

@@ -35,7 +35,12 @@ from PySide6.QtWidgets import (
 
 from config.config import DEFAULT_SIGNING_PIN
 from database.database import Database
-from services.pin_dialog import submit_pin_if_prompted
+from services.pin_dialog import get_last_pin_submission_error, submit_pin_if_prompted
+from services.self_watcher import (
+    auto_restart_enabled,
+    run_parent_watcher,
+    start_self_watcher,
+)
 
 
 class SigningPinHelper(QWidget):
@@ -46,6 +51,7 @@ class SigningPinHelper(QWidget):
         self._database = Database()
         self._database.initialize()
         self._watching = True
+        self._self_watcher_started = False
 
         self.setWindowTitle("MISA Signing PIN Helper")
         self.setMinimumWidth(390)
@@ -110,6 +116,7 @@ class SigningPinHelper(QWidget):
         )
 
     def _watch_for_pin(self) -> None:
+        self._ensure_self_watcher()
         if not self._watching:
             return
         if not self._pin_input.text():
@@ -117,9 +124,21 @@ class SigningPinHelper(QWidget):
             return
         if submit_pin_if_prompted(self._pin_input.text()):
             self._status.setText("Đã nhập PIN và xác nhận popup ký số.")
+            return
+        error = get_last_pin_submission_error()
+        if error:
+            self._status.setText(error)
+
+    def _ensure_self_watcher(self) -> None:
+        if self._self_watcher_started or not auto_restart_enabled(self._database):
+            return
+        start_self_watcher(Path(__file__).resolve())
+        self._self_watcher_started = True
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--watch-parent":
+        return run_parent_watcher(int(sys.argv[2]), Path(__file__).resolve())
     app = QApplication(sys.argv)
     app.setApplicationName("MISA Signing PIN Helper")
     window = SigningPinHelper()

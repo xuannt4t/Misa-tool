@@ -24,6 +24,7 @@ WAIT_OBJECT_0 = 0
 PIN_SUBMISSION_MUTEX = r"Local\MisaAutoToolSigningPin"
 _pin_submission_lock = threading.Lock()
 _last_submitted_dialog: int | None = None
+_last_submission_error: str | None = None
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -83,7 +84,7 @@ def _find_pin_dialog() -> int | None:
 
 
 def _focus_pin_control(hwnd: int) -> int | None:
-    """Return the first enabled Edit control in the native signer dialog."""
+    """Return the first enabled text-input control in the native signer dialog."""
     user32 = ctypes.windll.user32
     edit_controls: list[int] = []
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -91,8 +92,12 @@ def _focus_pin_control(hwnd: int) -> int | None:
     def visit(child: int, _lparam: int) -> bool:
         class_name = ctypes.create_unicode_buffer(256)
         user32.GetClassNameW(child, class_name, len(class_name))
+        control_class = class_name.value.casefold()
+        # Native Windows Edit controls use ``Edit``.  Several signer clients
+        # are built with Windows Forms and expose their PIN field as
+        # ``WindowsForms10.EDIT...`` instead, so exact matching skips it.
         if (
-            class_name.value.casefold() == "edit"
+            ("edit" in control_class or "textbox" in control_class)
             and user32.IsWindowVisible(child)
             and user32.IsWindowEnabled(child)
         ):
@@ -173,6 +178,11 @@ def _control_text_length(hwnd: int) -> int:
     return len(value.value)
 
 
+def get_last_pin_submission_error() -> str | None:
+    """Return the most recent detected PIN-popup failure without exposing PIN data."""
+    return _last_submission_error
+
+
 def submit_pin_if_prompted(pin: str) -> bool:
     """Fill the focused PIN control and submit the native signer dialog.
 
@@ -181,7 +191,7 @@ def submit_pin_if_prompted(pin: str) -> bool:
     """
     if not pin or os.name != "nt":
         return False
-    global _last_submitted_dialog
+    global _last_submitted_dialog, _last_submission_error
     # Several browser workers can be running at once.  Use both a Python lock
     # and a named Windows mutex so exactly one worker types into a shared PIN
     # dialog; the others keep listening and can take the next prompt.
@@ -197,6 +207,7 @@ def submit_pin_if_prompted(pin: str) -> bool:
         hwnd = _find_pin_dialog()
         if not hwnd:
             _last_submitted_dialog = None
+            _last_submission_error = None
             return False
         if hwnd == _last_submitted_dialog:
             return False
@@ -204,12 +215,19 @@ def submit_pin_if_prompted(pin: str) -> bool:
         user32 = ctypes.windll.user32
         pin_control = _activate_pin_dialog(hwnd)
         if not pin_control:
+            _last_submission_error = (
+                "Đã thấy popup PIN nhưng không tìm được hoặc không focus được ô nhập. "
+                "Hãy mở Trợ lý và ứng dụng ký số cùng quyền (không chạy một bên Administrator)."
+            )
             return False
         # Focus can be stolen while Windows finishes showing the dialog.  Do a
         # final focus-and-foreground check immediately before sending keys.
         time.sleep(0.2)
         pin_control = _activate_pin_dialog(hwnd)
         if not pin_control:
+            _last_submission_error = (
+                "Popup PIN đã mất focus trước khi nhập. Hãy mở Trợ lý và ứng dụng ký số cùng quyền."
+            )
             return False
         # Type into the verified focused region first.  Some signer versions
         # ignore WM_SETTEXT even though it reports success.
@@ -223,12 +241,15 @@ def submit_pin_if_prompted(pin: str) -> bool:
             # Retain a direct-value fallback for signer controls that do not
             # consume injected keyboard input.
             if not _activate_pin_dialog(hwnd):
+                _last_submission_error = "Không thể focus lại ô PIN để nhập mã."
                 return False
             user32.SetWindowTextW(pin_control, pin)
             time.sleep(0.1)
         if _control_text_length(pin_control) != len(pin):
+            _last_submission_error = "Ứng dụng ký số không nhận dữ liệu nhập tự động."
             return False
         _last_submitted_dialog = hwnd
+        _last_submission_error = None
         _press_virtual_key(VK_RETURN)
         return True
     finally:

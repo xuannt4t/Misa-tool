@@ -25,4 +25,5 @@ File tạo ra là `release\MISA-Auto-Tool-v1.0.0.zip`.
 2. Sao lưu `data` và `profile` trong thư mục đang cài nếu cần.
 3. Giải nén ZIP mới vào thư mục cha của `MISA Auto Tool`, chọn **Replace files** nếu Windows hỏi.
 4. Không xóa thư mục `data`, `profile` hoặc `logs`; chúng chứa cấu hình, dữ liệu chạy và/hoặc phiên đăng nhập.
-5. Mở lại `MISA Auto Tool.exe`.
+5. Mở `MISA Signing PIN Helper.exe` và chấp nhận yêu cầu quyền Administrator.
+6. Mở lại `MISA Auto Tool.exe`.

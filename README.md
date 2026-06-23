@@ -42,10 +42,19 @@ Cấu trúc phân phối:
 dist/
   MISA Auto Tool/
     MISA Auto Tool.exe
+    MISA Signing PIN Helper.exe
     profile/
     logs/
     data/
 ```
+
+Mở `MISA Signing PIN Helper.exe` trước khi phát hành. Windows sẽ hỏi quyền
+Administrator một lần; quyền này cho phép Trợ lý nhập PIN vào popup ký số,
+kể cả khi ứng dụng ký số đang chạy quyền Administrator.
+
+Trong tab **Cấu hình**, bật **Tự chạy lại app khi bị đóng** để mỗi EXE tạo
+một watcher nền cho chính nó. Tắt tùy chọn này và lưu cấu hình trước khi đóng
+nếu không muốn hai ứng dụng tự mở lại.
 
 Playwright Chromium không được đóng gói vào EXE. Ứng dụng ưu tiên Google Chrome đã cài trên Windows; nếu không có sẽ dùng Chromium đã cài bằng `playwright install chromium` trên máy build/máy chạy.
 

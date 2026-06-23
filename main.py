@@ -10,11 +10,14 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from database.database import Database
+from services.self_watcher import run_parent_watcher
 from ui.main_window import MainWindow
 
 
 def main() -> int:
     multiprocessing.freeze_support()
+    if len(sys.argv) == 3 and sys.argv[1] == "--watch-parent":
+        return run_parent_watcher(int(sys.argv[2]), Path(__file__).resolve())
     app = QApplication(sys.argv)
     app.setApplicationName("MISA Auto Tool")
     resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
