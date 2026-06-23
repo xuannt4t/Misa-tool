@@ -52,7 +52,6 @@ class SigningPinHelper(QWidget):
         super().__init__()
         self._database = Database()
         self._database.initialize()
-        self._watching = True
         self._self_watcher_started = False
 
         self.setWindowTitle("MISA Signing PIN Helper")
@@ -74,8 +73,6 @@ class SigningPinHelper(QWidget):
         self._show_pin = QCheckBox("Hiện PIN")
         self._show_pin.toggled.connect(self._toggle_pin_visibility)
 
-        self._toggle_button = QPushButton("Tạm dừng")
-        self._toggle_button.clicked.connect(self._toggle_watching)
         self._save_button = QPushButton("Lưu PIN")
         self._save_button.clicked.connect(self._save_pin)
 
@@ -85,7 +82,6 @@ class SigningPinHelper(QWidget):
 
         buttons = QHBoxLayout()
         buttons.addWidget(self._save_button)
-        buttons.addWidget(self._toggle_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(title)
@@ -115,17 +111,8 @@ class SigningPinHelper(QWidget):
         self._database.set_setting("signing_pin", self._pin_input.text())
         self._status.setText("Đã lưu PIN. Đang chờ popup ký số…")
 
-    def _toggle_watching(self) -> None:
-        self._watching = not self._watching
-        self._toggle_button.setText("Tạm dừng" if self._watching else "Bắt đầu theo dõi")
-        self._status.setText(
-            "Đang chờ popup ký số…" if self._watching else "Đã tạm dừng theo dõi PIN."
-        )
-
     def _watch_for_pin(self) -> None:
         self._ensure_self_watcher()
-        if not self._watching:
-            return
         if not self._pin_input.text():
             self._status.setText("Hãy nhập PIN trước khi bật theo dõi.")
             return
