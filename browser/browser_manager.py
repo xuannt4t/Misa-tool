@@ -176,6 +176,7 @@ class BrowserManager(QObject):
                 args=[f"--profile-directory={profile_name}"],
                 timeout=20_000,
             )
+            self._install_reminder_dismissal(context)
             if self._use_worker_profile:
                 self._emit(f"Worker {self._worker_id} đã mở Chrome profile riêng.")
             elif USE_WINDOWS_CHROME_PROFILE:
@@ -196,9 +197,42 @@ class BrowserManager(QObject):
                 ROOT_DIR / "profile" / f"worker-{self._worker_id}"
                 if self._use_worker_profile else PROFILE_DIR
             )
-            return playwright.chromium.launch_persistent_context(
+            context = playwright.chromium.launch_persistent_context(
                 str(fallback_profile), headless=False, timeout=20_000
             )
+            self._install_reminder_dismissal(context)
+            return context
+
+    @staticmethod
+    def _install_reminder_dismissal(context) -> None:
+        """Keep MISA's notification-assistant panel from covering the page.
+
+        MISA renders this panel asynchronously, including while an invoice form
+        is already in use.  An init script is used instead of a one-off
+        Playwright click so it is active on every navigation and can close a
+        panel that appears between automation steps.
+        """
+        context.add_init_script(
+            """() => {
+                const closeReminder = () => {
+                    for (const panel of document.querySelectorAll('.reminder-container')) {
+                        const closeButton = panel.querySelector(
+                            '.i-v2.button-close.i-close, .button-close.i-close, [class*="button-close"]'
+                        );
+                        if (closeButton instanceof HTMLElement) {
+                            closeButton.click();
+                        }
+                    }
+                };
+
+                closeReminder();
+                new MutationObserver(closeReminder).observe(document.documentElement, {
+                    childList: true,
+                    subtree: true,
+                });
+                window.setInterval(closeReminder, 300);
+            }"""
+        )
 
     def _chrome_profile(self) -> tuple[Path, str]:
         """Return the last Chrome profile used by this Windows user."""
